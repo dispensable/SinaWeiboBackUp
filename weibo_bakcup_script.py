@@ -15,12 +15,13 @@ cookie_file = "cookies"
 start_url = 'http://www.weibo.cn'
 mobile = 'yourloginname' # replace this
 password = 'yourpassword' # replace this
-profile_url = "http://weibo.cn/[yourid]/profile?vt=4" # replace this
+userid = 'yourid' # 查看自己的微博页面的url，那串数字就是, 例如http://weibo.com/191********/profile，191这串数字即是
+profile_url = "http://weibo.cn/" + userid + "/profile?vt=4"
 
 
 def get_my_weibo_url(filter, page):
     """filter: 1 为原创，2 为图片"""
-    return "http://weibo.cn/1910251081/profile?filter={0}&page={1}&vt=4".format(filter, page)
+    return "http://weibo.cn/" + userid + "/profile?filter={0}&page={1}&vt=4".format(filter, page)
 
 
 def get_login_link(start_url):
@@ -72,6 +73,7 @@ def get_login_content(login_soup, mobile, capacha, password, remember='on'):
 
 
 def get_headers(**kwargs):
+    """添加必要的头部信息，可酌情修改"""
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) "
                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36"}
     return headers
@@ -79,7 +81,6 @@ def get_headers(**kwargs):
 
 def is_login_successed(session):
     profile = session.get(profile_url)
-
     # 验证登录是否成功
     if profile.status_code == 200:
         return True
@@ -88,6 +89,7 @@ def is_login_successed(session):
 
 
 def get_session():
+    """获取会话"""
     # 使用session登录
     session = requests.Session()
     session.headers.update(get_headers())
@@ -97,11 +99,12 @@ def get_session():
         relogin()
     else:
         session.cookies.load()
-
+        
     return session
 
 
 def relogin():
+    """若不存在cookie文件或者cookie文件登录失败，重新登录并更新cookie"""
     # 获取登录链接
     login_link = get_login_link(start_url)
     # 获取login链接的bs4解析
@@ -134,7 +137,7 @@ def login():
 
 
 def parse_weibo(fd):
-
+    """解析原创微博的转发链接，评论链接，原文内容，图片链接，并保存到字典"""
     re_forward = re.compile("转发\[(.*)\]")
     re_comments = re.compile("评论\[(.*)\]")
     re_pic = re.compile("原图.?")
@@ -195,13 +198,12 @@ def parse_weibo(fd):
         article["time_via"] = time_via
 
         result.append(article)
-    # 关闭文件
-    #fd.close()
-
+    
     return result, now_max_page
 
 
 def parse_comments(comments):
+    """根据给定的评论链接，解析评论内容并保存返回"""
     # 找出评论
     soup = BeautifulSoup(comments, "lxml")
 
@@ -221,13 +223,12 @@ def parse_comments(comments):
         all_comment[str(cmt_id)] = "{0}: {1} --{2}".format(who.get_text(), text.get_text(), time_via.get_text())
         cmt_id += 1
     return all_comment
-    # 关闭文件
-    # comments.close()
 
 
 def parse_forwards(forwards):
     """ 4 和 7 maginc number
     因为懒得解析了，毕竟转发很少，所以直接用解析出的列表长度去除了不想要的
+    根据给定的转发链接，解析转发评论并保存，之后返回
     """
     # 取出转发评论
     soup = BeautifulSoup(forwards, "lxml")
@@ -247,7 +248,7 @@ def parse_forwards(forwards):
 
 
 def backup(login_session):
-
+    """备份数据保存到数据库"""
     # 准备数据库
     db_connectiong = MongoClient()
     db = db_connectiong.my_weibo
