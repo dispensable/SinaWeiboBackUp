@@ -4,7 +4,6 @@
 from PIL import Image
 import requests
 from bs4 import BeautifulSoup
-import urllib.parse, urllib.request
 from http.cookiejar import LWPCookieJar
 import os
 import re
@@ -13,14 +12,18 @@ from pymongo import MongoClient
 
 cookie_file = "cookies"
 start_url = 'http://www.weibo.cn'
-mobile = 'yourloginname' # replace this
-password = 'yourpassword' # replace this
-profile_url = "http://weibo.cn/[yourid]/profile?vt=4" # replace this
+mobile = os.environ.get('MOBILE') or 'your_mobile_phone_number'
+password = os.environ.get('PASSWORD') or 'your_password'
+userid = os.environ.get('USERID') or 'your_id'
+profile_url = "http://weibo.cn/" + userid + "/profile?vt=4"
+proxies = {
+    "http": "socks5://127.0.0.1:1080"
+}
 
 
 def get_my_weibo_url(filter, page):
     """filter: 1 为原创，2 为图片"""
-    return "http://weibo.cn/1910251081/profile?filter={0}&page={1}&vt=4".format(filter, page)
+    return "http://weibo.cn/" + userid + "/profile?filter={0}&page={1}&vt=4".format(filter, page)
 
 
 def get_login_link(start_url):
@@ -42,7 +45,7 @@ def get_login_soup(login_link):
 def get_capcha(login_soup):
     """获取验证码"""
     capcha_img_link = login_soup.img.get('src')
-    image = urllib.request.urlopen(capcha_img_link)
+    image = requests.get(capcha_img_link)
     capcha_img = Image.open(image, 'r')
     capcha_img.show()
 
@@ -71,7 +74,7 @@ def get_login_content(login_soup, mobile, capacha, password, remember='on'):
     return login_content
 
 
-def get_headers(**kwargs):
+def get_headers():
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) "
                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36"}
     return headers
@@ -90,6 +93,7 @@ def is_login_successed(session):
 def get_session():
     # 使用session登录
     session = requests.Session()
+    # session.proxies = proxies
     session.headers.update(get_headers())
     session.cookies = LWPCookieJar(cookie_file)
 
@@ -111,6 +115,7 @@ def relogin():
     # 获取登录表单
     login_content = get_login_content(login_soup, mobile, capacha, password)
     session = requests.Session()
+    # session.proxies = proxies
     session.headers.update(get_headers())
     session.cookies = LWPCookieJar(cookie_file)
 
@@ -195,8 +200,6 @@ def parse_weibo(fd):
         article["time_via"] = time_via
 
         result.append(article)
-    # 关闭文件
-    #fd.close()
 
     return result, now_max_page
 
@@ -242,50 +245,63 @@ def parse_forwards(forwards):
             result[str(result_num)] = ''.join(text)
             result_num += 1
     return result
-    # 关闭文件
-    #f.close()
 
 
-def backup(login_session):
+def get_total_pages(login_session):
+    # 获得原创微博的最大页码
+    my_weibo = login_session.get(get_my_weibo_url(1, 1)).text
+    _, now_max_page = parse_weibo(my_weibo)
+    return now_max_page[1]
+
+
+def backup(login_session, start=1, end=171):
+    now_parse_page = 0
 
     # 准备数据库
     db_connectiong = MongoClient()
     db = db_connectiong.my_weibo
     collection = db.items
 
-    # 获得原创微博的最大页码
-    my_weibo = login_session.get(get_my_weibo_url(1, 1)).text
-    _, now_max_page = parse_weibo(my_weibo)
-
     # 设置循环防止超过最大页码
-    try:
-        for wb_page_num in range(1, now_max_page[1]+1):
+    try:  # TODO: 当链接被重置时重置连接（微博反爬） 147 147, int(now_max_page[1])+1
+        for wb_page_num in range(start, end):
+            now_parse_page = wb_page_num
             # 解析原创微博
             fd = login_session.get(get_my_weibo_url(1, wb_page_num)).text
             results, page = parse_weibo(fd)
+
             print("Parsed {0}/{1} weibo ...".format(page[0], page[1]))
 
             # 解析评论
             copy_results = results[:]
             for content in copy_results:
-                # 取得链接
+                # 取得评论链接-解析-构造数据结构
                 comments_link = content['comments_link']
-                forwards_link = content['forward_link']
-                # 解析
                 comments = parse_comments(login_session.get(comments_link).text)
-                forwards_cmts = parse_forwards(login_session.get(forwards_link).text)
-                # 构造词典
                 content['comments'] = comments
-                content['forward_cmts'] = forwards_cmts
-                print("Parsed this page's comments and forwards comments.")
+
+                # 朋友圈微博不能转发,没有转发链接
+                try:
+                    # 取得转发链接 - 解析 - 构造数据结构
+                    forwards_link = content['forward_link']
+                    forwards_cmts = parse_forwards(login_session.get(forwards_link).text)
+                    content['forward_cmts'] = forwards_cmts
+                except KeyError:
+                    print("No forward link, may friend circle only.")
+                    content['forward_link'] = None
+                    content['forward_cmts'] = None
+
+                print("Parsed this weibo's comments and forwards comments.")
+
                 # 写入数据库
                 print("Saving data ...")
                 try:
                     collection.insert(content)
                 except Exception as e:
                     raise e
-
-            print("{0} page saved, {1} pages left...".format(page[0], str(int(page[1]) - int(page[0]))))
+                print("{0} page saved, {1} pages left...".format(page[0], str(int(page[1]) - int(page[0]))))
+    except (IndexError, ConnectionResetError):
+        return now_parse_page
     finally:
         db_connectiong.close()
 
@@ -297,6 +313,10 @@ if __name__ == "__main__":
     else:
         print("Login success!")
         # do something fun
-        backup(login_in_session)
-
-
+        now_error_page = 0
+        max_page = get_total_pages(login_in_session)
+        try:
+            # 获取异常出现时的页码
+            now_error_page = backup(login_in_session, 147, max_page)
+        except (IndexError, ConnectionResetError):
+            backup(login_in_session, now_error_page, max_page)
