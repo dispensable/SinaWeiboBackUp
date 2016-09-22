@@ -2,6 +2,7 @@
 # !/usr/bin/env python3
 
 from PIL import Image
+from io import BytesIO
 import requests
 from bs4 import BeautifulSoup
 from http.cookiejar import LWPCookieJar
@@ -12,10 +13,10 @@ from pymongo import MongoClient
 
 cookie_file = "cookies"
 start_url = 'http://www.weibo.cn'
-mobile = os.environ.get('MOBILE') or 'your_mobile_phone_number'
+mobile = os.environ.get('MOBILE') or 'your_longin_name'
 password = os.environ.get('PASSWORD') or 'your_password'
 userid = os.environ.get('USERID') or 'your_id'
-profile_url = "http://weibo.cn/" + userid + "/profile?vt=4"
+profile_url = "http://weibo.cn/" + userid + "/profile"
 proxies = {
     "http": "socks5://127.0.0.1:1080"
 }
@@ -46,7 +47,7 @@ def get_capcha(login_soup):
     """获取验证码"""
     capcha_img_link = login_soup.img.get('src')
     image = requests.get(capcha_img_link)
-    capcha_img = Image.open(image, 'r')
+    capcha_img = Image.open(BytesIO(image.content))
     capcha_img.show()
 
     capacha = input("please input code: ")
@@ -253,7 +254,7 @@ def get_total_pages(login_session):
     # 获得原创微博的最大页码
     my_weibo = login_session.get(get_my_weibo_url(1, 1)).text
     _, now_max_page = parse_weibo(my_weibo)
-    return now_max_page[1]
+    return int(now_max_page[1])
 
 
 def backup(login_session, start=1, end=171):
@@ -266,7 +267,7 @@ def backup(login_session, start=1, end=171):
     collection = db.items
 
     # 设置循环防止超过最大页码
-    try:  # TODO: 当链接被重置时重置连接（微博反爬） 147 147, int(now_max_page[1])+1
+    try:
         for wb_page_num in range(start, end):
             now_parse_page = wb_page_num
             # 解析原创微博
@@ -302,7 +303,8 @@ def backup(login_session, start=1, end=171):
                     collection.insert(content)
                 except Exception as e:
                     raise e
-                print("{0} page saved, {1} pages left...".format(page[0], str(int(page[1]) - int(page[0]))))
+            print("{0} page saved, {1} pages left...".format(page[0], str(int(page[1]) - int(page[0]))))
+        print("All done!")
     except (IndexError, ConnectionResetError):
         return now_parse_page
     finally:
@@ -320,6 +322,6 @@ if __name__ == "__main__":
         max_page = get_total_pages(login_in_session)
         try:
             # 获取异常出现时的页码
-            now_error_page = backup(login_in_session, 147, max_page)
+            now_error_page = backup(login_in_session, 170, max_page+1)
         except (IndexError, ConnectionResetError):
-            backup(login_in_session, now_error_page, max_page)
+            backup(login_in_session, now_error_page, max_page+1)
