@@ -1,6 +1,8 @@
 # _*_coding:utf-8_*_
 # !/usr/bin/env python3
 
+# TODO: 使用命令行解析工具获取登录信息，添加到保存为文件功能
+
 from PIL import Image
 from io import BytesIO
 import requests
@@ -13,9 +15,9 @@ from pymongo import MongoClient
 
 cookie_file = "cookies"
 start_url = 'http://www.weibo.cn'
-mobile = os.environ.get('MOBILE') or 'your_longin_name'
+mobile = os.environ.get('MOBILE') or 'yourloginname'
 password = os.environ.get('PASSWORD') or 'your_password'
-userid = os.environ.get('USERID') or 'your_id'
+userid = os.environ.get('USERID') or 'your_user_id'
 profile_url = "http://weibo.cn/" + userid + "/profile"
 proxies = {
     "http": "socks5://127.0.0.1:1080"
@@ -30,13 +32,14 @@ def get_my_weibo_url(filter, page):
 def get_login_link(start_url):
     """获取登录链接(post数据到该链接以登录)"""
     pub_inter = requests.get(start_url)
-    pub_soup = BeautifulSoup(pub_inter.text)
+    pub_soup = BeautifulSoup(pub_inter.text, "lxml")
     login_link = pub_soup.a.get('href')
 
     return login_link
 
 
 def get_login_soup(login_link):
+    """将页面解析为BeautifulSoup"""
     login = requests.get(login_link)
     login_soup = BeautifulSoup(login.text, "lxml")
 
@@ -311,6 +314,26 @@ def backup(login_session, start=1, end=171):
         db_connectiong.close()
 
 
+def backup_img(login_session):
+    """备份微博图片"""
+    # 准备数据库
+    db_connectiong = MongoClient()
+    db = db_connectiong.my_weibo
+    collection = db.items
+
+    # 查找有pic_link的document
+    all_pic_link = collection.find({"pic_link": {"$exists" : "true"}})
+    # 下载转化为binary
+    for weibo in all_pic_link:
+        pic_link = weibo["pic_link"]
+        img = login_session.get(pic_link).content
+        weibo["picture"] = img
+        collection.save(weibo)
+        print("{0}: picture saved!".format(weibo['id']))
+    print("All done!")
+    # 关闭数据库连接
+    db_connectiong.close()
+
 if __name__ == "__main__":
     login_in_session = login()
     if not login_in_session:
@@ -322,6 +345,8 @@ if __name__ == "__main__":
         max_page = get_total_pages(login_in_session)
         try:
             # 获取异常出现时的页码
-            now_error_page = backup(login_in_session, 170, max_page+1)
+            now_error_page = backup(login_in_session, 1, max_page+1)
         except (IndexError, ConnectionResetError):
             backup(login_in_session, now_error_page, max_page+1)
+
+        backup_img(login_in_session)
